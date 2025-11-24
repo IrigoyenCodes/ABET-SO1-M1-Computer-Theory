@@ -1,4 +1,24 @@
+#!/usr/bin/env python3
+"""
+Lexical and Semantic Analyzer for C-like Language
+
+This module implements a comprehensive lexical analyzer (tokenizer) and semantic analyzer
+for a subset of the C programming language. The analyzer supports basic data types,
+control structures, and comprehensive error reporting.
+
+Author: Santiago Patricio Irigoyen Vazquez
+Course: Computer Theory - SO1-M1
+Date: November 2025
+
+Usage:
+    python main.py                    # Run with built-in example
+    python tests.py                    # Run test suite
+    python main.py <file.c>            # Analyze specific file
+"""
+
 import re
+import sys
+import os
 
 class LexicalAnalyzer:
     def __init__(self):
@@ -247,21 +267,23 @@ class SemanticAnalyzer:
         """Regresa al ámbito global"""
         self.current_scope = 'global'
     
-    def add_symbol(self, name, symbol_type, line, column):
-        """Añade un símbolo a la tabla de símbolos"""
-        if name in self.scopes[self.current_scope]:
+    def add_symbol(self, name, var_type, line, column):
+        """Add a symbol to the current scope"""
+        current_scope_symbols = self.scopes[self.current_scope]
+        
+        # Check if symbol already exists in current scope
+        if name in current_scope_symbols:
             self.errors.append({
                 'message': f'Variable "{name}" ya ha sido declarada en este ámbito',
                 'line': line,
                 'column': column
             })
-            return False
-        
-        self.scopes[self.current_scope][name] = {
-            'type': symbol_type,
-            'declared_at': (line, column)
-        }
-        return True
+        else:
+            current_scope_symbols[name] = {
+                'type': var_type,
+                'declared_at': (line, column)
+            }
+            return True
     
     def lookup_symbol(self, name):
         """Busca un símbolo en la tabla de símbolos"""
@@ -279,19 +301,35 @@ class SemanticAnalyzer:
         """Verifica que todas las variables usadas estén declaradas"""
         for i, token in enumerate(tokens):
             if token['type'] == 'IDENTIFIER':
-                # Verificar si es una declaración (el token anterior es un tipo de dato)
-                is_declaration = (i > 0 and 
-                                 tokens[i-1]['type'] == 'KEYWORD' and 
-                                 tokens[i-1]['value'] in ['int', 'float', 'char', 'double', 'void'])
-                
-                if not is_declaration:
-                    symbol = self.lookup_symbol(token['value'])
-                    if symbol is None:
-                        self.errors.append({
-                            'message': f'Variable no declarada: {token["value"]}',
-                            'line': token['line'],
-                            'column': token['column']
-                        })
+                if self._should_check_variable(tokens, i):
+                    self._validate_variable_declaration(token)
+    
+    def _should_check_variable(self, tokens, index):
+        """Check if identifier should be validated for declaration"""
+        return not (self._is_declaration(tokens, index) or 
+                   self._is_function_definition(tokens, index))
+    
+    def _is_declaration(self, tokens, index):
+        """Check if identifier is part of a declaration"""
+        return (index > 0 and 
+                tokens[index-1]['type'] == 'KEYWORD' and 
+                tokens[index-1]['value'] in ['int', 'float', 'char', 'double', 'void'])
+    
+    def _is_function_definition(self, tokens, index):
+        """Check if identifier is a function definition"""
+        return (index < len(tokens) - 1 and 
+                tokens[index+1]['type'] == 'DELIMITER' and 
+                tokens[index+1]['value'] == '(')
+    
+    def _validate_variable_declaration(self, token):
+        """Validate that variable is declared"""
+        symbol = self.lookup_symbol(token['value'])
+        if symbol is None:
+            self.errors.append({
+                'message': f'Variable no declarada: {token["value"]}',
+                'line': token['line'],
+                'column': token['column']
+            })
     
     def check_type_compatibility(self, tokens):
         """Verifica la compatibilidad de tipos en operaciones"""
@@ -299,57 +337,76 @@ class SemanticAnalyzer:
         while i < len(tokens):
             token = tokens[i]
             
-            # Verificar asignaciones
-            if token['type'] == 'OPERATOR' and token['value'] == '=':
-                if i > 0 and tokens[i-1]['type'] == 'IDENTIFIER':
-                    var_name = tokens[i-1]['value']
-                    var_info = self.lookup_symbol(var_name)
-                    
-                    if var_info:
-                        expected_type = var_info['type']
-                        
-                        # Buscar el valor asignado
-                        j = i + 1
-                        while j < len(tokens) and tokens[j]['type'] not in ['DELIMITER', 'OPERATOR']:
-                            if tokens[j]['type'] in ['INTEGER', 'FLOAT']:
-                                value_type = 'int' if tokens[j]['type'] == 'INTEGER' else 'float'
-                                if expected_type != value_type:
-                                    self.errors.append({
-                                        'message': f'Incompatibilidad de tipos: no se puede asignar {value_type} a {expected_type}',
-                                        'line': tokens[i]['line'],
-                                        'column': tokens[i]['column']
-                                    })
-                            j += 1
+            if self._is_assignment_operator(token):
+                self._check_assignment_compatibility(tokens, i)
             
             i += 1
+    
+    def _is_assignment_operator(self, token):
+        """Check if token is an assignment operator"""
+        return token['type'] == 'OPERATOR' and token['value'] == '='
+    
+    def _check_assignment_compatibility(self, tokens, i):
+        """Check type compatibility for assignment at position i"""
+        if i <= 0 or tokens[i-1]['type'] != 'IDENTIFIER':
+            return
+        
+        var_name = tokens[i-1]['value']
+        var_info = self.lookup_symbol(var_name)
+        
+        if not var_info:
+            return
+        
+        expected_type = var_info['type']
+        value_tokens = self._get_assignment_value(tokens, i + 1)
+        
+        for value_token in value_tokens:
+            self._validate_value_type(value_token, expected_type, tokens[i])
+    
+    def _get_assignment_value(self, tokens, start_idx):
+        """Extract value tokens from assignment"""
+        value_tokens = []
+        j = start_idx
+        
+        while j < len(tokens) and tokens[j]['type'] not in ['DELIMITER', 'OPERATOR']:
+            if tokens[j]['type'] in ['INTEGER', 'FLOAT', 'STRING']:
+                value_tokens.append(tokens[j])
+            j += 1
+        
+        return value_tokens
+    
+    def _validate_value_type(self, value_token, expected_type, error_token):
+        """Validate if value token is compatible with expected type"""
+        if value_token['type'] in ['INTEGER', 'FLOAT']:
+            self._check_numeric_type(value_token, expected_type, error_token)
+        elif value_token['type'] == 'STRING':
+            self._check_string_type(expected_type, error_token)
+    
+    def _check_numeric_type(self, value_token, expected_type, error_token):
+        """Check numeric type compatibility"""
+        value_type = 'int' if value_token['type'] == 'INTEGER' else 'float'
+        
+        # Allow implicit conversion from int to float
+        if expected_type != value_type and not (expected_type == 'float' and value_type == 'int'):
+            self.errors.append({
+                'message': f'Incompatibilidad de tipos: no se puede asignar {value_type} a {expected_type}',
+                'line': error_token['line'],
+                'column': error_token['column']
+            })
+    
+    def _check_string_type(self, expected_type, error_token):
+        """Check string type compatibility"""
+        if expected_type != 'char':
+            self.errors.append({
+                'message': f'Incompatibilidad de tipos: no se puede asignar string a {expected_type}',
+                'line': error_token['line'],
+                'column': error_token['column']
+            })
     
     def analyze(self, tokens):
         """Realiza el análisis semántico"""
         # Primera pasada: recolectar declaraciones
-        i = 0
-        while i < len(tokens):
-            token = tokens[i]
-            
-            # Detectar declaración de variables
-            if (token['type'] == 'KEYWORD' and 
-                token['value'] in ['int', 'float', 'char', 'double']):
-                var_type = token['value']
-                
-                # Buscar el identificador después del tipo
-                j = i + 1
-                while j < len(tokens) and tokens[j]['type'] != 'DELIMITER':
-                    if tokens[j]['type'] == 'IDENTIFIER':
-                        self.add_symbol(
-                            tokens[j]['value'],
-                            var_type,
-                            tokens[j]['line'],
-                            tokens[j]['column']
-                        )
-                    j += 1
-                
-                i = j
-            else:
-                i += 1
+        self._collect_declarations(tokens)
         
         # Segunda pasada: verificar uso de variables
         self.check_undeclared_variables(tokens)
@@ -358,47 +415,115 @@ class SemanticAnalyzer:
         self.check_type_compatibility(tokens)
         
         return self.errors
-
+    
+    def _collect_declarations(self, tokens):
+        """Collect variable declarations from tokens"""
+        i = 0
+        while i < len(tokens):
+            if self._is_type_keyword(tokens[i]):
+                i = self._process_declaration(tokens, i)
+            else:
+                i += 1
+    
+    def _is_type_keyword(self, token):
+        """Check if token is a type keyword"""
+        return (token['type'] == 'KEYWORD' and 
+                token['value'] in ['int', 'float', 'char', 'double', 'void'])
+    
+    def _process_declaration(self, tokens, start_index):
+        """Process a variable declaration starting at start_index"""
+        var_type = tokens[start_index]['value']
+        i = start_index + 1
+        
+        while i < len(tokens) and tokens[i]['type'] not in ['DELIMITER']:
+            if tokens[i]['type'] == 'IDENTIFIER':
+                if self._is_function_definition(tokens, i):
+                    break
+                else:
+                    self._add_variable(tokens[i], var_type)
+            i += 1
+        
+        return i
+    
+    def _is_function_definition(self, tokens, index):
+        """Check if identifier at index is a function definition"""
+        return (index < len(tokens) - 1 and 
+                tokens[index + 1]['type'] == 'DELIMITER' and 
+                tokens[index + 1]['value'] == '(')
+    
+    def _add_variable(self, token, var_type):
+        """Add variable to current scope"""
+        current_scope_symbols = self.scopes[self.current_scope]
+        var_name = token['value']
+        
+        if var_name in current_scope_symbols:
+            self.errors.append({
+                'message': f'Variable "{var_name}" ya ha sido declarada en este ámbito',
+                'line': token['line'],
+                'column': token['column']
+            })
+        else:
+            current_scope_symbols[var_name] = {
+                'type': var_type,
+                'declared_at': (token['line'], token['column'])
+            }
+    
+    
 
 if __name__ == '__main__':
-    # Ejemplo de uso del analizador léxico y semántico
-    lexer = LexicalAnalyzer()
-    semantic = SemanticAnalyzer()
+    import sys
+    import os
     
-    # Código de ejemplo corregido
-    sample_code = '''
-    int main() {
-        // Declaraciones únicas de variables
-        int numero = 10;
-        float precio = 99.99f;  // 'f' para indicar que es float
-        char letra = 'A';
-        int suma;  // Declaración de suma antes de usarla
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        # Analyze file from command line
+        filename = sys.argv[1]
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
+                source_code = f.read()
+            print(f"\nAnalyzing file: {filename}")
+        else:
+            print(f"Error: File '{filename}' not found.")
+            sys.exit(1)
+    else:
+        # Use built-in example
+        source_code = '''
+int main() {
+    // Declaraciones únicas de variables
+    int numero = 10;
+    float precio = 99.99f;  // 'f' para indicar que es float
+    char letra = 'A';
+    int suma;  // Declaración de suma antes de usarla
+    
+    // Conversión explícita para la suma de tipos diferentes
+    float resultado = (float)numero + precio;
+    
+    if (numero > 5) {
+        int temporal = 100;
+        suma = numero + temporal;  // Ahora suma está declarada
         
-        // Conversión explícita para la suma de tipos diferentes
-        float resultado = (float)numero + precio;
-        
-        if (numero > 5) {
-            int temporal = 100;
-            suma = numero + temporal;  // Ahora suma está declarada
-            
-            // Mostrar resultados
-            printf("La suma es: %d\n", suma);
-            printf("El resultado es: %.2f\n", resultado);
-        }
-        
-        return 0;
+        // Mostrar resultados
+        printf("La suma es: %d\\n", suma);
+        printf("El resultado es: %.2f\\n", resultado);
     }
     
-    // Variables globales (sin duplicados)
-    int contador_global = 0;
-    float valor_global = 0.0f;
-    '''
+    return 0;
+}
+
+// Variables globales (sin duplicados)
+int contador_global = 0;
+float valor_global = 0.0f;
+'''
+    
+    # Initialize analyzers
+    lexer = LexicalAnalyzer()
+    semantic = SemanticAnalyzer()
     
     # Análisis léxico
     print("=" * 60)
     print("ANÁLISIS LÉXICO")
     print("=" * 60)
-    lexer.analyze(sample_code)
+    lexer.analyze(source_code)
     
     # Mostrar tokens
     print("\nTokens encontrados:")
