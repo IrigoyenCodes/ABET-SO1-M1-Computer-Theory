@@ -19,6 +19,65 @@ Usage:
 import re
 import sys
 import os
+from enum import Enum
+
+# AST Node Types
+class NodeType(Enum):
+    PROGRAM = "program"
+    FUNCTION = "function"
+    PARAMETER = "parameter"
+    DECLARATION = "declaration"
+    ASSIGNMENT = "assignment"
+    IF_STATEMENT = "if_statement"
+    WHILE_STATEMENT = "while_statement"
+    FOR_STATEMENT = "for_statement"
+    RETURN_STATEMENT = "return_statement"
+    BINARY_EXPRESSION = "binary_expression"
+    UNARY_EXPRESSION = "unary_expression"
+    FUNCTION_CALL = "function_call"
+    IDENTIFIER = "identifier"
+    LITERAL = "literal"
+
+# AST Node Class
+class ASTNode:
+    def __init__(self, node_type, value=None, children=None, line=0, column=0):
+        self.type = node_type
+        self.value = value
+        self.children = children if children is not None else []
+        self.line = line
+        self.column = column
+    
+    def add_child(self, node):
+        self.children.append(node)
+        return node
+    
+    def __repr__(self):
+        return f"ASTNode({self.type}, {self.value}, {len(self.children)} children)"
+
+# Bytecode Instructions
+class OpCode(Enum):
+    LOAD_CONST = "LOAD_CONST"
+    LOAD_VAR = "LOAD_VAR"
+    STORE_VAR = "STORE_VAR"
+    BINARY_ADD = "BINARY_ADD"
+    BINARY_SUB = "BINARY_SUB"
+    BINARY_MUL = "BINARY_MUL"
+    BINARY_DIV = "BINARY_DIV"
+    BINARY_CMP = "BINARY_CMP"
+    JUMP_IF_FALSE = "JUMP_IF_FALSE"
+    JUMP = "JUMP"
+    CALL = "CALL"
+    RETURN = "RETURN"
+    PRINT = "PRINT"
+
+class Instruction:
+    def __init__(self, opcode, operand=None, line=0):
+        self.opcode = opcode
+        self.operand = operand
+        self.line = line
+    
+    def __repr__(self):
+        return f"Instruction({self.opcode}, {self.operand})"
 
 class LexicalAnalyzer:
     def __init__(self):
@@ -306,8 +365,19 @@ class SemanticAnalyzer:
     
     def _should_check_variable(self, tokens, index):
         """Check if identifier should be validated for declaration"""
-        return not (self._is_declaration(tokens, index) or 
-                   self._is_function_definition(tokens, index))
+        # Don't check if it's a declaration
+        if self._is_declaration(tokens, index):
+            return False
+        # Don't check if it's a function definition
+        if self._is_function_definition(tokens, index):
+            return False
+        # Don't check if it's the left side of assignment (variable being assigned to)
+        if (index < len(tokens) - 1 and 
+            tokens[index + 1]['type'] == 'OPERATOR' and 
+            tokens[index + 1]['value'] == '='):
+            return False
+        # Otherwise, it's usage and should be checked
+        return True
     
     def _is_declaration(self, tokens, index):
         """Check if identifier is part of a declaration"""
@@ -435,15 +505,51 @@ class SemanticAnalyzer:
         var_type = tokens[start_index]['value']
         i = start_index + 1
         
-        while i < len(tokens) and tokens[i]['type'] not in ['DELIMITER']:
+        # Process only until we hit a semicolon
+        while i < len(tokens) and not self._is_semicolon(tokens[i]):
             if tokens[i]['type'] == 'IDENTIFIER':
                 if self._is_function_definition(tokens, i):
                     break
                 else:
-                    self._add_variable(tokens[i], var_type)
+                    i = self._process_variable_declaration(tokens, i, var_type)
+                    break
             i += 1
         
         return i
+    
+    def _is_semicolon(self, token):
+        """Check if token is a semicolon"""
+        return token['type'] == 'DELIMITER' and token['value'] == ';'
+    
+    def _process_variable_declaration(self, tokens, index, var_type):
+        """Process a single variable declaration"""
+        self._add_variable(tokens[index], var_type)
+        
+        # Move to next token after identifier
+        i = index + 1
+        
+        # Skip assignment expression if present
+        i = self._skip_assignment_expression(tokens, i)
+        
+        return i
+    
+    def _skip_assignment_expression(self, tokens, start_index):
+        """Skip assignment expression and return end index"""
+        i = start_index
+        
+        # Check if there's an assignment operator
+        if i < len(tokens) and self._is_assignment_operator(tokens[i]):
+            i += 1  # Skip '='
+            
+            # Skip the entire expression until semicolon
+            while i < len(tokens) and not self._is_semicolon(tokens[i]):
+                i += 1
+        
+        return i
+    
+    def _is_assignment_operator(self, token):
+        """Check if token is assignment operator"""
+        return token['type'] == 'OPERATOR' and token['value'] == '='
     
     def _is_function_definition(self, tokens, index):
         """Check if identifier at index is a function definition"""
@@ -469,6 +575,477 @@ class SemanticAnalyzer:
             }
     
     
+
+# Parser/AST Generator
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.position = 0
+        self.current_token = None
+        self.errors = []
+        if tokens:
+            self.current_token = tokens[0]
+    
+    def advance(self):
+        """Move to next token"""
+        self.position += 1
+        if self.position < len(self.tokens):
+            self.current_token = self.tokens[self.position]
+        else:
+            self.current_token = None
+    
+    def peek(self, offset=1):
+        """Look ahead at token without consuming"""
+        peek_pos = self.position + offset
+        if peek_pos < len(self.tokens):
+            return self.tokens[peek_pos]
+        return None
+    
+    def expect(self, token_type, value=None):
+        """Expect a specific token type and optionally value"""
+        if (self.current_token and 
+            self.current_token['type'] == token_type and
+            (value is None or self.current_token['value'] == value)):
+            token = self.current_token
+            self.advance()
+            return token
+        else:
+            self.errors.append({
+                'message': f"Expected {token_type} {f'({value})' if value else ''}, got {self.current_token['type'] if self.current_token else 'EOF'}",
+                'line': self.current_token['line'] if self.current_token else 0,
+                'column': self.current_token['column'] if self.current_token else 0
+            })
+            return None
+    
+    def parse(self):
+        """Parse tokens into AST"""
+        program = ASTNode(NodeType.PROGRAM)
+        
+        while self.current_token:
+            if self.current_token['type'] == 'KEYWORD' and self.current_token['value'] in ['int', 'float', 'char', 'void']:
+                func = self.parse_function()
+                if func:
+                    program.add_child(func)
+            else:
+                self.advance()
+        
+        return program
+    
+    def parse_function(self):
+        """Parse function definition"""
+        return_type = self.current_token
+        self.advance()
+        
+        func_name = self.expect('IDENTIFIER')
+        if not func_name:
+            return None
+        
+        self.expect('DELIMITER', '(')
+        self.expect('DELIMITER', ')')
+        
+        self.expect('DELIMITER', '{')
+        
+        func_node = ASTNode(NodeType.FUNCTION, func_name['value'], 
+                          line=func_name['line'], column=func_name['column'])
+        func_node.add_child(ASTNode(NodeType.LITERAL, return_type['value']))
+        
+        # Parse function body
+        while self.current_token and self.current_token['value'] != '}':
+            stmt = self.parse_statement()
+            if stmt:
+                func_node.add_child(stmt)
+        
+        self.expect('DELIMITER', '}')
+        return func_node
+    
+    def parse_statement(self):
+        """Parse statement"""
+        if self.current_token['type'] == 'KEYWORD':
+            if self.current_token['value'] == 'int' or self.current_token['value'] == 'float':
+                return self.parse_declaration()
+            elif self.current_token['value'] == 'if':
+                return self.parse_if_statement()
+            elif self.current_token['value'] == 'while':
+                return self.parse_while_statement()
+            elif self.current_token['value'] == 'return':
+                return self.parse_return_statement()
+        elif self.current_token['type'] == 'IDENTIFIER':
+            return self.parse_assignment_or_call()
+        
+        self.advance()
+        return None
+    
+    def parse_declaration(self):
+        """Parse variable declaration"""
+        var_type = self.current_token
+        self.advance()
+        
+        var_name = self.expect('IDENTIFIER')
+        if not var_name:
+            return None
+        
+        decl_node = ASTNode(NodeType.DECLARATION, var_type['value'],
+                          line=var_type['line'], column=var_type['column'])
+        decl_node.add_child(ASTNode(NodeType.IDENTIFIER, var_name['value']))
+        
+        # Check for initialization
+        if self.current_token and self.current_token['value'] == '=':
+            self.advance()
+            expr = self.parse_expression()
+            if expr:
+                decl_node.add_child(expr)
+        
+        self.expect('DELIMITER', ';')
+        return decl_node
+    
+    def parse_assignment_or_call(self):
+        """Parse assignment or function call"""
+        var_name = self.current_token
+        self.advance()
+        
+        if self.current_token and self.current_token['value'] == '=':
+            # Assignment
+            self.advance()
+            expr = self.parse_expression()
+            
+            assign_node = ASTNode(NodeType.ASSIGNMENT, var_name['value'],
+                                 line=var_name['line'], column=var_name['column'])
+            assign_node.add_child(ASTNode(NodeType.IDENTIFIER, var_name['value']))
+            if expr:
+                assign_node.add_child(expr)
+            
+            self.expect('DELIMITER', ';')
+            return assign_node
+        elif self.current_token and self.current_token['value'] == '(':
+            # Function call
+            self.advance()
+            self.expect('DELIMITER', ')')
+            
+            call_node = ASTNode(NodeType.FUNCTION_CALL, var_name['value'],
+                               line=var_name['line'], column=var_name['column'])
+            self.expect('DELIMITER', ';')
+            return call_node
+        
+        return None
+    
+    def parse_if_statement(self):
+        """Parse if statement"""
+        self.expect('KEYWORD', 'if')
+        self.expect('DELIMITER', '(')
+        condition = self.parse_expression()
+        self.expect('DELIMITER', ')')
+        self.expect('DELIMITER', '{')
+        
+        if_node = ASTNode(NodeType.IF_STATEMENT)
+        if condition:
+            if_node.add_child(condition)
+        
+        # Parse if body
+        while self.current_token and self.current_token['value'] != '}':
+            stmt = self.parse_statement()
+            if stmt:
+                if_node.add_child(stmt)
+        
+        self.expect('DELIMITER', '}')
+        return if_node
+    
+    def parse_while_statement(self):
+        """Parse while statement"""
+        self.expect('KEYWORD', 'while')
+        self.expect('DELIMITER', '(')
+        condition = self.parse_expression()
+        self.expect('DELIMITER', ')')
+        self.expect('DELIMITER', '{')
+        
+        while_node = ASTNode(NodeType.WHILE_STATEMENT)
+        if condition:
+            while_node.add_child(condition)
+        
+        # Parse while body
+        while self.current_token and self.current_token['value'] != '}':
+            stmt = self.parse_statement()
+            if stmt:
+                while_node.add_child(stmt)
+        
+        self.expect('DELIMITER', '}')
+        return while_node
+    
+    def parse_return_statement(self):
+        """Parse return statement"""
+        self.expect('KEYWORD', 'return')
+        
+        return_node = ASTNode(NodeType.RETURN_STATEMENT)
+        if self.current_token and self.current_token['value'] != ';':
+            expr = self.parse_expression()
+            if expr:
+                return_node.add_child(expr)
+        
+        self.expect('DELIMITER', ';')
+        return return_node
+    
+    def parse_expression(self):
+        """Parse expression (simplified)"""
+        left = self.parse_term()
+        
+        while (self.current_token and 
+               self.current_token['type'] == 'OPERATOR' and
+               self.current_token['value'] in ['+', '-', '>', '<', '==', '!=']):
+            op = self.current_token
+            self.advance()
+            right = self.parse_term()
+            
+            bin_expr = ASTNode(NodeType.BINARY_EXPRESSION, op['value'],
+                             line=op['line'], column=op['column'])
+            bin_expr.add_child(left)
+            bin_expr.add_child(right)
+            left = bin_expr
+        
+        return left
+    
+    def parse_term(self):
+        """Parse term (simplified)"""
+        if self.current_token['type'] == 'INTEGER':
+            token = self.current_token
+            self.advance()
+            return ASTNode(NodeType.LITERAL, int(token['value']),
+                         line=token['line'], column=token['column'])
+        elif self.current_token['type'] == 'FLOAT':
+            token = self.current_token
+            self.advance()
+            return ASTNode(NodeType.LITERAL, float(token['value']),
+                         line=token['line'], column=token['column'])
+        elif self.current_token['type'] == 'IDENTIFIER':
+            token = self.current_token
+            self.advance()
+            return ASTNode(NodeType.IDENTIFIER, token['value'],
+                         line=token['line'], column=token['column'])
+        elif self.current_token['value'] == '(':
+            self.advance()
+            expr = self.parse_expression()
+            self.expect('DELIMITER', ')')
+            return expr
+        
+        return None
+
+
+# Virtual Machine/Interpreter
+class VirtualMachine:
+    def __init__(self):
+        self.stack = []
+        self.memory = {}
+        self.instruction_pointer = 0
+        self.instructions = []
+        self.running = False
+    
+    def load_instructions(self, instructions):
+        """Load bytecode instructions"""
+        self.instructions = instructions
+        self.instruction_pointer = 0
+    
+    def run(self):
+        """Execute all instructions"""
+        self.running = True
+        while self.running and self.instruction_pointer < len(self.instructions):
+            self.execute_instruction()
+    
+    def execute_instruction(self):
+        """Execute single instruction"""
+        instr = self.instructions[self.instruction_pointer]
+        
+        # Handle stack operations
+        if self._handle_stack_ops(instr):
+            return
+        
+        # Handle arithmetic operations
+        if self._handle_arithmetic_ops(instr):
+            return
+        
+        # Handle control flow operations
+        if self._handle_control_flow_ops(instr):
+            return
+        
+        # Handle other operations
+        self._handle_other_ops(instr)
+        
+        self.instruction_pointer += 1
+    
+    def _handle_stack_ops(self, instr):
+        """Handle stack-based operations"""
+        if instr.opcode == OpCode.LOAD_CONST:
+            self.stack.append(instr.operand)
+            return True
+        elif instr.opcode == OpCode.LOAD_VAR:
+            var_name = instr.operand
+            if var_name in self.memory:
+                self.stack.append(self.memory[var_name])
+            else:
+                print(f"Runtime Error: Undefined variable '{var_name}'")
+                self.running = False
+            return True
+        elif instr.opcode == OpCode.STORE_VAR:
+            var_name = instr.operand
+            if self.stack:
+                self.memory[var_name] = self.stack.pop()
+            return True
+        return False
+    
+    def _handle_arithmetic_ops(self, instr):
+        """Handle arithmetic operations"""
+        if len(self.stack) < 2:
+            return False
+        
+        if instr.opcode == OpCode.BINARY_ADD:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            self.stack.append(a + b)
+            return True
+        elif instr.opcode == OpCode.BINARY_SUB:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            self.stack.append(a - b)
+            return True
+        elif instr.opcode == OpCode.BINARY_MUL:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            self.stack.append(a * b)
+            return True
+        elif instr.opcode == OpCode.BINARY_DIV:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            if b != 0:
+                self.stack.append(a / b)
+            else:
+                print("Runtime Error: Division by zero")
+                self.running = False
+            return True
+        elif instr.opcode == OpCode.BINARY_CMP:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            self.stack.append(1 if a > b else 0)
+            return True
+        return False
+    
+    def _handle_control_flow_ops(self, instr):
+        """Handle control flow operations"""
+        if instr.opcode == OpCode.JUMP_IF_FALSE:
+            if self.stack and self.stack.pop() == 0:
+                self.instruction_pointer = instr.operand
+                return True
+        elif instr.opcode == OpCode.JUMP:
+            self.instruction_pointer = instr.operand
+            return True
+        return False
+    
+    def _handle_other_ops(self, instr):
+        """Handle other operations"""
+        if instr.opcode == OpCode.PRINT:
+            if self.stack:
+                value = self.stack.pop()
+                print(value)
+        elif instr.opcode == OpCode.RETURN:
+            self.running = False
+    
+    def print_state(self):
+        """Debug: Print VM state"""
+        print(f"IP: {self.instruction_pointer}")
+        print(f"Stack: {self.stack}")
+        print(f"Memory: {self.memory}")
+
+
+# Code Generator
+class CodeGenerator:
+    def __init__(self):
+        self.instructions = []
+        self.label_counter = 0
+    
+    def generate(self, ast):
+        """Generate bytecode from AST"""
+        self.instructions = []
+        self.generate_node(ast)
+        return self.instructions
+    
+    def generate_node(self, node):
+        """Generate bytecode for AST node"""
+        if node.type == NodeType.PROGRAM:
+            for child in node.children:
+                self.generate_node(child)
+        elif node.type == NodeType.FUNCTION:
+            # Generate function body (skip return type for now)
+            for child in node.children[1:]:  # Skip return type
+                self.generate_node(child)
+        elif node.type == NodeType.DECLARATION:
+            if len(node.children) > 1:  # Has initialization
+                self.generate_node(node.children[1])  # Generate expression
+                self.instructions.append(Instruction(OpCode.STORE_VAR, node.children[0].value))
+        elif node.type == NodeType.ASSIGNMENT:
+            self.generate_node(node.children[1])  # Generate expression
+            self.instructions.append(Instruction(OpCode.STORE_VAR, node.children[0].value))
+        elif node.type == NodeType.BINARY_EXPRESSION:
+            self.generate_node(node.children[0])
+            self.generate_node(node.children[1])
+            
+            if node.value == '+':
+                self.instructions.append(Instruction(OpCode.BINARY_ADD))
+            elif node.value == '-':
+                self.instructions.append(Instruction(OpCode.BINARY_SUB))
+            elif node.value == '*':
+                self.instructions.append(Instruction(OpCode.BINARY_MUL))
+            elif node.value == '/':
+                self.instructions.append(Instruction(OpCode.BINARY_DIV))
+            elif node.value == '>':
+                self.instructions.append(Instruction(OpCode.BINARY_CMP))
+        elif node.type == NodeType.LITERAL:
+            self.instructions.append(Instruction(OpCode.LOAD_CONST, node.value))
+        elif node.type == NodeType.IDENTIFIER:
+            self.instructions.append(Instruction(OpCode.LOAD_VAR, node.value))
+        elif node.type == NodeType.IF_STATEMENT:
+            # Generate condition
+            self.generate_node(node.children[0])
+            
+            # Jump if false
+            false_label = self.new_label()
+            self.instructions.append(Instruction(OpCode.JUMP_IF_FALSE, false_label))
+            
+            # Generate if body
+            for child in node.children[1:]:
+                self.generate_node(child)
+            
+            # Set label
+            self.set_label(false_label)
+        elif node.type == NodeType.WHILE_STATEMENT:
+            start_label = self.new_label()
+            self.set_label(start_label)
+            
+            # Generate condition
+            self.generate_node(node.children[0])
+            
+            # Jump if false
+            end_label = self.new_label()
+            self.instructions.append(Instruction(OpCode.JUMP_IF_FALSE, end_label))
+            
+            # Generate while body
+            for child in node.children[1:]:
+                self.generate_node(child)
+            
+            # Jump back to start
+            self.instructions.append(Instruction(OpCode.JUMP, start_label))
+            
+            # Set end label
+            self.set_label(end_label)
+        elif node.type == NodeType.RETURN_STATEMENT:
+            if node.children:
+                self.generate_node(node.children[0])
+            self.instructions.append(Instruction(OpCode.RETURN))
+    
+    def new_label(self):
+        """Create new label"""
+        label = len(self.instructions)
+        return label
+    
+    def set_label(self, label):
+        """Set label at current position"""
+        pass  # Labels are just instruction indices in this simple implementation
+
 
 if __name__ == '__main__':
     import sys
@@ -518,6 +1095,9 @@ float valor_global = 0.0f;
     # Initialize analyzers
     lexer = LexicalAnalyzer()
     semantic = SemanticAnalyzer()
+    parser = Parser([])
+    codegen = CodeGenerator()
+    vm = VirtualMachine()
     
     # Análisis léxico
     print("=" * 60)
@@ -574,7 +1154,7 @@ float valor_global = 0.0f;
     print("\n" + "=" * 60)
     print("CÓDIGO ANALIZADO")
     print("=" * 60)
-    print(sample_code)
+    print(source_code)
     print("-" * 60)
     
     # Mostrar los primeros 10 tokens como ejemplo
@@ -588,3 +1168,46 @@ float valor_global = 0.0f;
         print(f"\nTotal de errores encontrados: {total_errores}")
     else:
         print("\n¡Análisis completado sin errores!")
+        
+        # PARSING - Generate AST
+        print("\n" + "=" * 60)
+        print("PARSING - ÁRBOL DE SINTAXIS ABSTRACTA")
+        print("=" * 60)
+        
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+        
+        if parser.errors:
+            print("\nErrores de parsing encontrados:")
+            for error in parser.errors:
+                print(f"Línea {error['line']}, Columna {error['column']}: {error['message']}")
+        else:
+            print("Parsing completado exitosamente")
+            print(f"AST Root: {ast}")
+            print(f"Total de nodos: {len(ast.children)}")
+        
+        # CODE GENERATION - Generate Bytecode
+        print("\n" + "=" * 60)
+        print("GENERACIÓN DE CÓDIGO - BYTECODE")
+        print("=" * 60)
+        
+        if not parser.errors:
+            instructions = codegen.generate(ast)
+            print("Generacion de codigo completada")
+            print(f"Total de instrucciones: {len(instructions)}")
+            
+            print("\nBytecode generado:")
+            for i, instr in enumerate(instructions):
+                print(f"  {i:3d}: {instr}")
+            
+            # VIRTUAL MACHINE - Execute
+            print("\n" + "=" * 60)
+            print("MÁQUINA VIRTUAL - EJECUCIÓN")
+            print("=" * 60)
+            
+            vm.load_instructions(instructions)
+            print("Ejecutando programa...")
+            vm.run()
+            
+            print("\nEstado final de la VM:")
+            vm.print_state()

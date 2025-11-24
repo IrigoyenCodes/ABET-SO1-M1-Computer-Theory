@@ -159,6 +159,11 @@ make clean     # Clean temporary files
 
 ## Documentation
 
+### Essential Documentation
+- [**Executive Summary**](EXECUTIVE_SUMMARY.md) - Project overview and key achievements
+- [**Architecture Overview**](ARCHITECTURE.md) - System design and component integration
+- [**Reproducibility Guide**](REPRODUCIBILITY.md) - Build/run instructions and environment setup
+
 ### Core Documentation
 - [Investigation Report](INVESTIGATION_REPORT.md) - Complete academic documentation (15 pages)
 - [Technical Documentation](SEMANTIC_ANALYZER.md) - Detailed implementation guide
@@ -172,6 +177,9 @@ make clean     # Clean temporary files
 
 ### Quick Links
 - **Getting Started**: [Installation & Usage](#quick-start)
+- **Project Overview**: [Executive Summary](EXECUTIVE_SUMMARY.md)
+- **System Architecture**: [Architecture Overview](ARCHITECTURE.md)
+- **Reprocibility**: [Build Instructions](REPRODUCIBILITY.md)
 - **API Reference**: [Complete API Documentation](API.md)
 - **Language Details**: [Language Specification](LANGUAGE_SPEC.md)
 - **Examples**: [Sample Programs](examples/)
