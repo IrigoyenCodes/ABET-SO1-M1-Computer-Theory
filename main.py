@@ -578,13 +578,13 @@ class SemanticAnalyzer:
 
 # Parser/AST Generator
 class Parser:
-    def __init__(self, tokens):
-        self.tokens = tokens
+    def __init__(self, tokens=None):
+        self.tokens = tokens or []
         self.position = 0
         self.current_token = None
         self.errors = []
-        if tokens:
-            self.current_token = tokens[0]
+        if self.tokens:
+            self.current_token = self.tokens[0]
     
     def advance(self):
         """Move to next token"""
@@ -804,22 +804,22 @@ class Parser:
     
     def parse_term(self):
         """Parse term (simplified)"""
-        if self.current_token['type'] == 'INTEGER':
+        if self.current_token and self.current_token['type'] == 'INTEGER':
             token = self.current_token
             self.advance()
             return ASTNode(NodeType.LITERAL, int(token['value']),
                          line=token['line'], column=token['column'])
-        elif self.current_token['type'] == 'FLOAT':
+        elif self.current_token and self.current_token['type'] == 'FLOAT':
             token = self.current_token
             self.advance()
             return ASTNode(NodeType.LITERAL, float(token['value']),
                          line=token['line'], column=token['column'])
-        elif self.current_token['type'] == 'IDENTIFIER':
+        elif self.current_token and self.current_token['type'] == 'IDENTIFIER':
             token = self.current_token
             self.advance()
             return ASTNode(NodeType.IDENTIFIER, token['value'],
                          line=token['line'], column=token['column'])
-        elif self.current_token['value'] == '(':
+        elif self.current_token and self.current_token['value'] == '(':
             self.advance()
             expr = self.parse_expression()
             self.expect('DELIMITER', ')')
@@ -975,15 +975,22 @@ class CodeGenerator:
                 self.generate_node(child)
         elif node.type == NodeType.DECLARATION:
             if len(node.children) > 1:  # Has initialization
-                self.generate_node(node.children[1])  # Generate expression
+                # Generate expression first
+                self.generate_node(node.children[1])  
+                # Store result in variable
                 self.instructions.append(Instruction(OpCode.STORE_VAR, node.children[0].value))
         elif node.type == NodeType.ASSIGNMENT:
-            self.generate_node(node.children[1])  # Generate expression
+            # Generate expression
+            self.generate_node(node.children[1])  
+            # Store result in variable
             self.instructions.append(Instruction(OpCode.STORE_VAR, node.children[0].value))
         elif node.type == NodeType.BINARY_EXPRESSION:
+            # Generate left operand
             self.generate_node(node.children[0])
+            # Generate right operand  
             self.generate_node(node.children[1])
             
+            # Apply operation
             if node.value == '+':
                 self.instructions.append(Instruction(OpCode.BINARY_ADD))
             elif node.value == '-':
@@ -992,11 +999,13 @@ class CodeGenerator:
                 self.instructions.append(Instruction(OpCode.BINARY_MUL))
             elif node.value == '/':
                 self.instructions.append(Instruction(OpCode.BINARY_DIV))
-            elif node.value == '>':
-                self.instructions.append(Instruction(OpCode.BINARY_CMP))
+            elif node.value in ['>', '<', '>=', '<=', '==', '!=']:
+                self.instructions.append(Instruction(OpCode.BINARY_CMP, node.value))
         elif node.type == NodeType.LITERAL:
+            # Load constant onto stack
             self.instructions.append(Instruction(OpCode.LOAD_CONST, node.value))
         elif node.type == NodeType.IDENTIFIER:
+            # Load variable onto stack
             self.instructions.append(Instruction(OpCode.LOAD_VAR, node.value))
         elif node.type == NodeType.IF_STATEMENT:
             # Generate condition
@@ -1010,7 +1019,7 @@ class CodeGenerator:
             for child in node.children[1:]:
                 self.generate_node(child)
             
-            # Set label
+            # Set label for after if
             self.set_label(false_label)
         elif node.type == NodeType.WHILE_STATEMENT:
             start_label = self.new_label()
@@ -1019,7 +1028,7 @@ class CodeGenerator:
             # Generate condition
             self.generate_node(node.children[0])
             
-            # Jump if false
+            # Jump if false (exit loop)
             end_label = self.new_label()
             self.instructions.append(Instruction(OpCode.JUMP_IF_FALSE, end_label))
             
@@ -1034,7 +1043,11 @@ class CodeGenerator:
             self.set_label(end_label)
         elif node.type == NodeType.RETURN_STATEMENT:
             if node.children:
+                # Generate return expression
                 self.generate_node(node.children[0])
+            else:
+                # Return 0 by default
+                self.instructions.append(Instruction(OpCode.LOAD_CONST, 0))
             self.instructions.append(Instruction(OpCode.RETURN))
     
     def new_label(self):
